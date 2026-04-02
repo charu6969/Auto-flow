@@ -19,7 +19,7 @@ const prisma = new PrismaClient();
 interface DMJobData {
   dmLogId: string;
   accountId: string;
-  igUserId: string;
+  pageId: string; // Facebook Page ID — Meta requires DMs via /{PAGE_ID}/messages
   recipientIgId: string;
   message: string;
   accessToken: string;
@@ -43,7 +43,7 @@ async function incrementRate(accountId: string): Promise<void> {
 const worker = new Worker<DMJobData>(
   'dm-queue',
   async (job) => {
-    const { dmLogId, accountId, igUserId, recipientIgId, message, accessToken, commentId } = job.data;
+    const { dmLogId, accountId, pageId, recipientIgId, message, accessToken, commentId } = job.data;
 
     console.log(`[dm-worker] Processing job ${job.id} for DmLog ${dmLogId}`);
 
@@ -68,7 +68,7 @@ const worker = new Worker<DMJobData>(
 
     try {
       // Send the DM via Instagram Graph API
-      await sendInstagramDM(igUserId, recipientIgId, message, accessToken, commentId);
+      await sendInstagramDM(pageId, recipientIgId, message, accessToken, commentId);
 
       // Increment rate counter
       await incrementRate(accountId);

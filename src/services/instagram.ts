@@ -26,7 +26,7 @@ export function getOAuthUrl(): string {
   const params = new URLSearchParams({
     client_id: META_APP_ID,
     redirect_uri: `${APP_URL}/api/auth/callback`,
-    scope: 'instagram_basic,instagram_manage_messages,instagram_manage_comments,pages_show_list',
+    scope: 'instagram_basic,instagram_manage_messages,instagram_manage_comments,pages_show_list,pages_manage_metadata,pages_messaging',
     response_type: 'code',
     state: crypto.randomUUID(),
   });
@@ -106,12 +106,14 @@ export async function getUserPages(accessToken: string): Promise<IGPageInfo[]> {
 }
 
 /**
- * Send a DM to an Instagram user via the Graph API
+ * Send a DM to an Instagram user via the Graph API (using the Facebook Page endpoint).
  * If commentId is provided, it sends a 'Private Reply' to that comment.
  * Otherwise, it attempts a standard DM (requires open 24hr messaging window).
+ * 
+ * NOTE: Meta requires DMs to be sent via POST /{PAGE_ID}/messages, NOT /{IG_USER_ID}/messages.
  */
 export async function sendInstagramDM(
-  igUserId: string,
+  pageId: string,
   recipientIgId: string,
   message: string,
   accessToken: string,
@@ -130,7 +132,7 @@ export async function sendInstagramDM(
     payload.recipient = { id: recipientIgId };
   }
 
-  const res = await fetch(`${GRAPH_API_BASE}/${igUserId}/messages`, {
+  const res = await fetch(`${GRAPH_API_BASE}/${pageId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -168,7 +170,7 @@ export async function subscribePageToWebhooks(pageId: string, pageAccessToken: s
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      subscribed_fields: ['feed'],
+      subscribed_fields: ['feed', 'messages'],
       access_token: pageAccessToken,
     }),
   });

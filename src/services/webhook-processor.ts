@@ -105,7 +105,7 @@ export async function processCommentWebhook(
   await dmQueue.add('send-dm', {
     dmLogId: dmLog.id,
     accountId: account.id,
-    igUserId: account.igUserId,
+    pageId: account.pageId, // Meta requires DMs via /{PAGE_ID}/messages
     recipientIgId: commenterIgId,
     message: match.trigger.responseMessage,
     accessToken: account.accessToken,

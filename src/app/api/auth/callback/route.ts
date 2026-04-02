@@ -86,7 +86,12 @@ export async function GET(request: NextRequest) {
           console.log('[auth/callback] Direct IG fetch:', JSON.stringify(igData, null, 2));
 
           if (igData.id && igData.username) {
-            // Construct the pageWithIG object manually
+            // IMPORTANT: Meta requires a Page Access Token to send DMs via /{PAGE_ID}/messages.
+            // If pageData.access_token is missing, we fall back to the long-lived user token,
+            // but log a warning because DM sending may fail without a proper Page token.
+            if (!pageData.access_token) {
+              console.warn('[auth/callback] ⚠️ No Page Access Token found — falling back to user token. DM sending may fail.');
+            }
             pageWithIG = {
               id: pageId,
               name: pageData.name || 'Page',
