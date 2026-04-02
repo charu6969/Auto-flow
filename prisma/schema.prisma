@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  accounts InstagramAccount[]
+
+  @@map("users")
+}
+
+model InstagramAccount {
+  id             String    @id @default(cuid())
+  igUserId       String    @unique @map("ig_user_id")
+  igUsername      String    @map("ig_username")
+  pageId         String    @map("page_id")
+  accessToken    String    @map("access_token")
+  tokenExpiresAt DateTime? @map("token_expires_at")
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  triggers Trigger[]
+  dmLogs   DmLog[]
+
+  @@map("instagram_accounts")
+}
+
+enum DmStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  RATE_LIMITED
+}
+
+model Trigger {
+  id              String  @id @default(cuid())
+  keyword         String
+  responseMessage String  @map("response_message")
+  isActive        Boolean @default(true) @map("is_active")
+  matchCount      Int     @default(0) @map("match_count")
+  mediaId         String? @map("media_id") // null = all posts, set = specific post only
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  accountId String           @map("account_id")
+  account   InstagramAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  dmLogs DmLog[]
+
+  @@unique([accountId, keyword, mediaId], name: "unique_trigger_per_account")
+  @@map("triggers")
+}
+
+model DmLog {
+  id                String   @id @default(cuid())
+  commentId         String?  @map("comment_id")
+  commentText       String?  @map("comment_text")
+  commenterIgId     String   @map("commenter_ig_id")
+  commenterUsername  String?  @map("commenter_username")
+  mediaId           String?  @map("media_id")
+  dmMessageSent     String?  @map("dm_message_sent")
+  status            DmStatus @default(QUEUED)
+  errorMessage      String?  @map("error_message")
+  retryCount        Int      @default(0) @map("retry_count")
+  sentAt            DateTime? @map("sent_at")
+  isTest            Boolean  @default(false) @map("is_test")
+  isArchived        Boolean  @default(false) @map("is_archived")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  accountId String           @map("account_id")
+  account   InstagramAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  triggerId String?  @map("trigger_id")
+  trigger   Trigger? @relation(fields: [triggerId], references: [id], onDelete: SetNull)
+
+  // Compound index for duplicate comment protection (Feature #8)
+  @@unique([commenterIgId, triggerId, mediaId], name: "unique_dm_per_commenter_trigger_media")
+  @@index([accountId, status])
+  @@index([accountId, createdAt])
+  @@map("dm_logs")
+}
