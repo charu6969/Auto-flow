@@ -6,8 +6,12 @@ import { sendInstagramDM } from '../services/instagram';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const RATE_LIMIT_MAX = 180;
 
+// Render Redis uses rediss:// (TLS) — enable TLS when detected
+const redisTls = REDIS_URL.startsWith('rediss://') ? { tls: { rejectUnauthorized: false } } : {};
+
 const connection = new IORedis(REDIS_URL, {
   maxRetriesPerRequest: null,
+  ...redisTls,
 });
 
 const prisma = new PrismaClient();

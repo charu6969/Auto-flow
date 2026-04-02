@@ -3,9 +3,13 @@ import IORedis from 'ioredis';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
+// Render Redis uses rediss:// (TLS) — enable TLS when detected
+const redisTls = REDIS_URL.startsWith('rediss://') ? { tls: { rejectUnauthorized: false } } : {};
+
 // Shared Redis connection for all queues
 export const redisConnection = new IORedis(REDIS_URL, {
   maxRetriesPerRequest: null,
+  ...redisTls,
 });
 
 // DM sending queue
