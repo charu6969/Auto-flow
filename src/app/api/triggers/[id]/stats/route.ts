@@ -8,14 +8,15 @@ import { getSession } from '@/lib/session';
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getSession();
   if (!session?.accountId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const triggerId = params.id;
+  const resolvedParams = await params;
+  const triggerId = resolvedParams.id;
 
   // Verify trigger belongs to this account
   const trigger = await prisma.trigger.findFirst({
