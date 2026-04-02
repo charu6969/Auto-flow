@@ -4,12 +4,11 @@ databases:
     user: replybot
     plan: free
 
-  - name: replybot-redis
-    type: redis
-    plan: free
-    ipAllowList: []
-
 services:
+  - type: keyvalue
+    name: replybot-redis
+    plan: free
+
   - type: web
     name: replybot-web
     env: node
@@ -22,8 +21,9 @@ services:
           name: replybot-db
           property: connectionString
       - key: REDIS_URL
-        fromDatabase:
+        fromService:
           name: replybot-redis
+          type: keyvalue
           property: connectionString
       - key: META_APP_ID
         sync: false
@@ -48,6 +48,7 @@ services:
           name: replybot-db
           property: connectionString
       - key: REDIS_URL
-        fromDatabase:
+        fromService:
           name: replybot-redis
+          type: keyvalue
           property: connectionString
