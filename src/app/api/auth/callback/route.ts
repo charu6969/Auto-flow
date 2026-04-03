@@ -4,12 +4,11 @@ import { createSession } from '@/lib/session';
 import {
   exchangeCodeForToken,
   getLongLivedToken,
-  getUserPages,
-  subscribePageToWebhooks,
+  getInstagramUser,
+  subscribeToInstagramWebhooks,
 } from '@/services/instagram';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-import { GRAPH_API_BASE } from '@/lib/constants';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -26,161 +25,69 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // 1. Exchange code for short-lived token
+    // 1. Exchange code for short-lived Instagram token
     const shortTokenRes = await exchangeCodeForToken(code);
     console.log('[auth/callback] Short-lived token obtained');
 
-    // 2. Get long-lived token
+    // 2. Exchange for long-lived token (~60 days)
     const longTokenRes = await getLongLivedToken(shortTokenRes.access_token);
     const expiresInSeconds = longTokenRes.expires_in || 60 * 24 * 60 * 60;
     const tokenExpiresAt = new Date(Date.now() + expiresInSeconds * 1000);
 
-    // 3. Validate required permissions
-    const permRes = await fetch(
-      `${GRAPH_API_BASE}/me/permissions?access_token=${longTokenRes.access_token}`
-    );
-    const permData = await permRes.json();
-    const grantedPerms = (permData.data || [])
-      .filter((p: any) => p.status === 'granted')
-      .map((p: any) => p.permission);
-
-    const requiredPerms = [
-      'instagram_basic',
-      'instagram_manage_messages',
-      'instagram_manage_comments',
-      'pages_show_list',
-      'pages_messaging',
-    ];
-    const missingPerms = requiredPerms.filter(p => !grantedPerms.includes(p));
-    if (missingPerms.length > 0) {
-      console.error('[auth/callback] Missing permissions:', missingPerms);
-      return NextResponse.redirect(
-        `${APP_URL}/login?error=missing_permissions&perms=${missingPerms.join(',')}`
-      );
-    }
-    console.log('[auth/callback] All required permissions granted');
-
-    // 4. Try standard /me/accounts first
-    let pages = await getUserPages(longTokenRes.access_token);
-    console.log('[auth/callback] Pages from /me/accounts:', JSON.stringify(pages, null, 2));
-    let pageWithIG = pages.find((p) => p.instagram_business_account);
-
-    // 4. If /me/accounts returned empty (Facebook Login for Business issue),
-    //    extract page ID from token's granular scopes and fetch directly
-    if (!pageWithIG) {
-      console.log('[auth/callback] /me/accounts empty, trying granular scopes fallback...');
-
-      // Debug token to get granular scopes
-      const debugRes = await fetch(
-        `${GRAPH_API_BASE}/debug_token?input_token=${shortTokenRes.access_token}&access_token=${shortTokenRes.access_token}`
-      );
-      const debugData = await debugRes.json();
-      console.log('[auth/callback] Token debug:', JSON.stringify(debugData, null, 2));
-
-      // Extract page ID from pages_show_list granular scope
-      const granularScopes = debugData?.data?.granular_scopes || [];
-      const pagesScope = granularScopes.find(
-        (s: any) => s.scope === 'pages_show_list'
-      );
-      const igBasicScope = granularScopes.find(
-        (s: any) => s.scope === 'instagram_basic'
-      );
-
-      const pageId = pagesScope?.target_ids?.[0];
-      const igUserId = igBasicScope?.target_ids?.[0];
-
-      console.log('[auth/callback] Page ID from scopes:', pageId);
-      console.log('[auth/callback] IG User ID from scopes:', igUserId);
-
-      if (pageId) {
-        // Fetch the page directly by ID
-        const pageRes = await fetch(
-          `${GRAPH_API_BASE}/${pageId}?fields=id,name,access_token,instagram_business_account{id,username}&access_token=${longTokenRes.access_token}`
-        );
-        const pageData = await pageRes.json();
-        console.log('[auth/callback] Direct page fetch:', JSON.stringify(pageData, null, 2));
-
-        if (pageData.instagram_business_account) {
-          pageWithIG = pageData;
-        } else if (igUserId) {
-          // If page fetch doesn't return IG account, try fetching IG user directly
-          const igRes = await fetch(
-            `${GRAPH_API_BASE}/${igUserId}?fields=id,username&access_token=${longTokenRes.access_token}`
-          );
-          const igData = await igRes.json();
-          console.log('[auth/callback] Direct IG fetch:', JSON.stringify(igData, null, 2));
-
-          if (igData.id && igData.username) {
-            // Instagram DMs REQUIRE a Page Access Token. A user token will be rejected.
-            if (!pageData.access_token) {
-              console.error('[auth/callback] No Page Access Token available. Instagram DMs require a Page token.');
-              return NextResponse.redirect(`${APP_URL}/login?error=no_page_token`);
-            }
-            pageWithIG = {
-              id: pageId,
-              name: pageData.name || 'Page',
-              access_token: pageData.access_token,
-              instagram_business_account: {
-                id: igData.id,
-                username: igData.username,
-              },
-            };
-          }
-        }
-      }
+    // 3. Validate required permissions are granted
+    // Instagram Login returns granted permissions in the token response
+    // We check by attempting to fetch user info — if it fails, permissions are missing
+    const igUser = await getInstagramUser(longTokenRes.access_token);
+    if (!igUser?.id || !igUser?.username) {
+      console.error('[auth/callback] Could not fetch Instagram user info — check permissions');
+      return NextResponse.redirect(`${APP_URL}/login?error=missing_permissions`);
     }
 
-    if (!pageWithIG || !pageWithIG.instagram_business_account) {
-      console.error('[auth/callback] Could not find Instagram Business account after all attempts');
-      return NextResponse.redirect(
-        `${APP_URL}/login?error=no_ig_business`
-      );
-    }
+    console.log('[auth/callback] Instagram user:', igUser.username, '(', igUser.id, ')');
 
-    console.log('[auth/callback] Found IG account:', JSON.stringify(pageWithIG.instagram_business_account, null, 2));
-    const igAccount = pageWithIG.instagram_business_account;
-
-    // 5. Upsert user
+    // 4. Upsert user
     const user = await prisma.user.upsert({
-      where: { email: `${igAccount.username}@instagram.replybot` },
-      update: { name: igAccount.username },
+      where: { email: `${igUser.username}@instagram.replybot` },
+      update: { name: igUser.username },
       create: {
-        email: `${igAccount.username}@instagram.replybot`,
-        name: igAccount.username,
+        email: `${igUser.username}@instagram.replybot`,
+        name: igUser.username,
       },
     });
 
-    // 6. Upsert Instagram account
+    // 5. Upsert Instagram account.
+    // pageId is set to igUserId — the Instagram Login API doesn't use Facebook Pages.
     await prisma.instagramAccount.upsert({
-      where: { igUserId: igAccount.id },
+      where: { igUserId: igUser.id },
       update: {
-        igUsername: igAccount.username,
-        pageId: pageWithIG.id,
-        accessToken: pageWithIG.access_token,
+        igUsername: igUser.username,
+        pageId: igUser.id,
+        accessToken: longTokenRes.access_token,
         tokenExpiresAt,
         isActive: true,
       },
       create: {
-        igUserId: igAccount.id,
-        igUsername: igAccount.username,
-        pageId: pageWithIG.id,
-        accessToken: pageWithIG.access_token,
+        igUserId: igUser.id,
+        igUsername: igUser.username,
+        pageId: igUser.id,
+        accessToken: longTokenRes.access_token,
         tokenExpiresAt,
         isActive: true,
         userId: user.id,
       },
     });
 
-    // 7. Subscribe page to webhooks
+    // 6. Subscribe to Instagram webhook events (comments + messages)
     try {
-      await subscribePageToWebhooks(pageWithIG.id, pageWithIG.access_token);
+      await subscribeToInstagramWebhooks(longTokenRes.access_token);
+      console.log('[auth/callback] Subscribed to Instagram webhooks');
     } catch (err) {
-      console.warn('[auth/callback] Page subscription warning:', err);
+      console.warn('[auth/callback] Webhook subscription warning (non-fatal):', err);
     }
 
-    // 8. Create session
+    // 7. Create session
     const account = await prisma.instagramAccount.findUnique({
-      where: { igUserId: igAccount.id },
+      where: { igUserId: igUser.id },
     });
 
     await createSession({

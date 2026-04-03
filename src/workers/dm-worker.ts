@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, DmStatus } from '../../node_modules/.prisma/client';
 import {
   sendInstagramDM,
   parseGraphApiError,
@@ -24,7 +24,7 @@ const prisma = new PrismaClient();
 interface DMJobData {
   dmLogId: string;
   accountId: string;
-  pageId: string; // Facebook Page ID — Meta requires DMs via /{PAGE_ID}/messages
+  pageId: string; // Instagram User ID (stored as pageId for compatibility — Instagram Login API doesn't use Facebook Pages)
   recipientIgId: string;
   message: string;
   accessToken: string;
@@ -93,15 +93,15 @@ const worker = new Worker<DMJobData>(
       const errorMsg = error instanceof Error ? error.message : String(error);
       const graphError = parseGraphApiError(error);
 
-      let finalStatus: string;
+      let finalStatus: DmStatus;
       if (graphError && isPermissionError(graphError)) {
         // Permission/token errors will never succeed on retry
-        finalStatus = 'FAILED';
+        finalStatus = DmStatus.FAILED;
         console.error(`[dm-worker] ❌ Permission error for log ${dmLogId} (code ${graphError.code}) — not retrying`);
       } else if (graphError && isRateLimitError(graphError)) {
-        finalStatus = 'RATE_LIMITED';
+        finalStatus = DmStatus.RATE_LIMITED;
       } else {
-        finalStatus = job.attemptsMade >= 2 ? 'FAILED' : 'QUEUED';
+        finalStatus = job.attemptsMade >= 2 ? DmStatus.FAILED : DmStatus.QUEUED;
       }
 
       await prisma.dmLog.update({

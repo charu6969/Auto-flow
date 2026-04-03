@@ -1,50 +1,48 @@
-import { GRAPH_API_BASE } from '@/lib/constants';
-const META_APP_ID = process.env.META_APP_ID!;
-const META_APP_SECRET = process.env.META_APP_SECRET!;
+import { INSTAGRAM_API_BASE, INSTAGRAM_OAUTH_BASE } from '@/lib/constants';
+
+const INSTAGRAM_APP_ID = process.env.INSTAGRAM_APP_ID!;
+const INSTAGRAM_APP_SECRET = process.env.INSTAGRAM_APP_SECRET!;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 export interface OAuthTokenResponse {
   access_token: string;
   token_type: string;
   expires_in?: number;
-}
-
-export interface IGPageInfo {
-  id: string;
-  name: string;
-  instagram_business_account?: {
-    id: string;
-    username: string;
-  };
-  access_token: string;
+  user_id?: string;
 }
 
 /**
- * Build the OAuth authorization URL to redirect user to Meta login
+ * Build the OAuth authorization URL using Instagram Login.
+ * Redirects to instagram.com (NOT facebook.com) for authorization.
  */
 export function getOAuthUrl(): string {
   const params = new URLSearchParams({
-    client_id: META_APP_ID,
+    client_id: INSTAGRAM_APP_ID,
     redirect_uri: `${APP_URL}/api/auth/callback`,
-    scope: 'instagram_basic,instagram_manage_messages,instagram_manage_comments,pages_show_list,pages_manage_metadata,pages_messaging',
+    scope: 'instagram_business_basic,instagram_business_manage_messages,instagram_manage_comments',
     response_type: 'code',
-    state: crypto.randomUUID(),
   });
-  return `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
+  return `https://www.instagram.com/oauth/authorize?${params.toString()}`;
 }
 
 /**
- * Exchange authorization code for short-lived access token
+ * Exchange authorization code for short-lived Instagram access token.
+ * Uses the Instagram OAuth endpoint (api.instagram.com).
  */
 export async function exchangeCodeForToken(code: string): Promise<OAuthTokenResponse> {
   const params = new URLSearchParams({
-    client_id: META_APP_ID,
-    client_secret: META_APP_SECRET,
+    client_id: INSTAGRAM_APP_ID,
+    client_secret: INSTAGRAM_APP_SECRET,
+    grant_type: 'authorization_code',
     redirect_uri: `${APP_URL}/api/auth/callback`,
     code,
   });
 
-  const res = await fetch(`${GRAPH_API_BASE}/oauth/access_token?${params.toString()}`);
+  const res = await fetch(`${INSTAGRAM_OAUTH_BASE}/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(`OAuth token exchange failed: ${JSON.stringify(err)}`);
@@ -53,17 +51,17 @@ export async function exchangeCodeForToken(code: string): Promise<OAuthTokenResp
 }
 
 /**
- * Exchange short-lived token for long-lived token (~60 days)
+ * Exchange short-lived token for long-lived Instagram token (~60 days).
+ * Uses graph.instagram.com with grant_type ig_exchange_token.
  */
 export async function getLongLivedToken(shortLivedToken: string): Promise<OAuthTokenResponse> {
   const params = new URLSearchParams({
-    grant_type: 'fb_exchange_token',
-    client_id: META_APP_ID,
-    client_secret: META_APP_SECRET,
-    fb_exchange_token: shortLivedToken,
+    grant_type: 'ig_exchange_token',
+    client_secret: INSTAGRAM_APP_SECRET,
+    access_token: shortLivedToken,
   });
 
-  const res = await fetch(`${GRAPH_API_BASE}/oauth/access_token?${params.toString()}`);
+  const res = await fetch(`${INSTAGRAM_API_BASE}/access_token?${params.toString()}`);
   if (!res.ok) {
     const err = await res.json();
     throw new Error(`Long-lived token exchange failed: ${JSON.stringify(err)}`);
@@ -72,17 +70,16 @@ export async function getLongLivedToken(shortLivedToken: string): Promise<OAuthT
 }
 
 /**
- * Refresh an expiring long-lived token (Feature #1)
+ * Refresh an expiring long-lived Instagram token (Feature #1).
+ * Uses graph.instagram.com with grant_type ig_refresh_token.
  */
 export async function refreshLongLivedToken(existingToken: string): Promise<OAuthTokenResponse> {
   const params = new URLSearchParams({
-    grant_type: 'fb_exchange_token',
-    client_id: META_APP_ID,
-    client_secret: META_APP_SECRET,
-    fb_exchange_token: existingToken,
+    grant_type: 'ig_refresh_token',
+    access_token: existingToken,
   });
 
-  const res = await fetch(`${GRAPH_API_BASE}/oauth/access_token?${params.toString()}`);
+  const res = await fetch(`${INSTAGRAM_API_BASE}/refresh_access_token?${params.toString()}`);
   if (!res.ok) {
     const err = await res.json();
     throw new Error(`Token refresh failed: ${JSON.stringify(err)}`);
@@ -91,18 +88,20 @@ export async function refreshLongLivedToken(existingToken: string): Promise<OAut
 }
 
 /**
- * Get user's Facebook Pages with Instagram Business accounts
+ * Get the authenticated Instagram user's basic info (id, username).
+ * Uses graph.instagram.com/me with the Instagram user access token.
  */
-export async function getUserPages(accessToken: string): Promise<IGPageInfo[]> {
+export async function getInstagramUser(
+  accessToken: string
+): Promise<{ id: string; username: string }> {
   const res = await fetch(
-    `${GRAPH_API_BASE}/me/accounts?fields=id,name,instagram_business_account{id,username},access_token&access_token=${accessToken}`
+    `${INSTAGRAM_API_BASE}/me?fields=id,username&access_token=${accessToken}`
   );
   if (!res.ok) {
     const err = await res.json();
-    throw new Error(`Failed to fetch pages: ${JSON.stringify(err)}`);
+    throw new Error(`Failed to fetch Instagram user: ${JSON.stringify(err)}`);
   }
-  const data = await res.json();
-  return data.data || [];
+  return res.json();
 }
 
 // ─── Graph API Error Parsing ───────────────────────────────────────────
@@ -159,7 +158,7 @@ export function isRateLimitError(err: GraphApiError): boolean {
 
 /**
  * Send a Private Reply to a specific comment.
- * Uses POST /me/messages with the Page Access Token.
+ * Uses POST /me/messages on graph.instagram.com with the Instagram user token.
  */
 async function sendPrivateReply(
   message: string,
@@ -172,7 +171,7 @@ async function sendPrivateReply(
     access_token: accessToken,
   };
 
-  const res = await fetch(`${GRAPH_API_BASE}/me/messages`, {
+  const res = await fetch(`${INSTAGRAM_API_BASE}/me/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -187,7 +186,7 @@ async function sendPrivateReply(
 
 /**
  * Send a standard DM to an Instagram user (requires 24hr messaging window).
- * Uses POST /me/messages with the Page Access Token.
+ * Uses POST /me/messages on graph.instagram.com with the Instagram user token.
  */
 async function sendStandardDM(
   recipientIgId: string,
@@ -201,7 +200,7 @@ async function sendStandardDM(
     access_token: accessToken,
   };
 
-  const res = await fetch(`${GRAPH_API_BASE}/me/messages`, {
+  const res = await fetch(`${INSTAGRAM_API_BASE}/me/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -216,14 +215,14 @@ async function sendStandardDM(
 
 /**
  * Send a DM to an Instagram user via the Instagram Send API.
- * If commentId is provided, attempts a Private Reply first, then falls back
- * to a standard DM if the Private Reply fails for comment-specific reasons.
+ * Attempts Private Reply first (if commentId provided), then falls back to
+ * standard DM if the Private Reply fails for comment-specific reasons.
  *
- * Uses POST /me/messages with the Page Access Token (NOT /{PAGE_ID}/messages,
- * which is the Facebook Messenger endpoint).
+ * Uses POST /me/messages on graph.instagram.com with the Instagram user token.
+ * Does NOT use graph.facebook.com or require a Facebook Page.
  */
 export async function sendInstagramDM(
-  _pageId: string,
+  _igUserId: string,
   recipientIgId: string,
   message: string,
   accessToken: string,
@@ -245,14 +244,14 @@ export async function sendInstagramDM(
 }
 
 /**
- * Get comment details from the Graph API
+ * Get comment details from the Instagram Graph API.
  */
 export async function getCommentDetails(
   commentId: string,
   accessToken: string
 ): Promise<{ id: string; text: string; from: { id: string; username: string }; media: { id: string } }> {
   const res = await fetch(
-    `${GRAPH_API_BASE}/${commentId}?fields=id,text,from{id,username},media{id}&access_token=${accessToken}`
+    `${INSTAGRAM_API_BASE}/${commentId}?fields=id,text,from{id,username},media{id}&access_token=${accessToken}`
   );
   if (!res.ok) {
     const err = await res.json();
@@ -262,25 +261,24 @@ export async function getCommentDetails(
 }
 
 /**
- * Subscribe a Facebook Page to webhooks for feed and messaging events.
+ * Subscribe the Instagram account to webhook events (comments + messages).
+ * Uses graph.instagram.com/me/subscribed_apps with the Instagram user token.
  *
- * IMPORTANT: This subscribes to Facebook Page-level webhooks only.
- * Instagram comment webhooks must be configured separately in the
- * Meta App Dashboard: Webhooks product > Instagram object > "comments" field.
- * The callback URL should be: {APP_URL}/api/webhook/instagram
+ * NOTE: The webhook callback URL and verify token must also be configured in the
+ * Meta App Dashboard under: Use cases > Instagram API > API Setup > Configure webhooks.
  */
-export async function subscribePageToWebhooks(pageId: string, pageAccessToken: string): Promise<void> {
-  const res = await fetch(`${GRAPH_API_BASE}/${pageId}/subscribed_apps`, {
+export async function subscribeToInstagramWebhooks(accessToken: string): Promise<void> {
+  const res = await fetch(`${INSTAGRAM_API_BASE}/me/subscribed_apps`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      subscribed_fields: ['feed', 'messages'],
-      access_token: pageAccessToken,
+      subscribed_fields: ['comments', 'messages'],
+      access_token: accessToken,
     }),
   });
 
   if (!res.ok) {
     const err = await res.json();
-    throw new Error(`Page subscription failed: ${JSON.stringify(err)}`);
+    throw new Error(`Instagram webhook subscription failed: ${JSON.stringify(err)}`);
   }
 }
