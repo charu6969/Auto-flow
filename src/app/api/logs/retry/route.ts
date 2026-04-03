@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
       account: {
         select: {
           igUserId: true,
+          pageId: true,
           accessToken: true,
         },
       },
@@ -58,10 +59,11 @@ export async function POST(request: NextRequest) {
     await dmQueue.add('send-dm', {
       dmLogId: log.id,
       accountId: log.accountId,
-      igUserId: log.account.igUserId,
+      pageId: log.account.pageId,
       recipientIgId: log.commenterIgId,
       message: log.dmMessageSent || '',
       accessToken: log.account.accessToken,
+      commentId: log.commentId || undefined,
     });
 
     requeued++;

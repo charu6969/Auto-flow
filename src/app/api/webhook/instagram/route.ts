@@ -39,13 +39,10 @@ export async function POST(request: NextRequest) {
 
     if (signature !== expectedSignature) {
       console.warn('[webhook] ❌ Invalid signature');
-      console.warn('Expected:', expectedSignature);
-      console.warn('Received:', signature);
-      // In development, we'll let it pass to allow local testing
-      // Temporarily disabled for MVP testing in production as well
-      /* if (process.env.NODE_ENV === 'production') {
+      if (process.env.NODE_ENV === 'production') {
         return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
-      } */
+      }
+      console.warn('[webhook] Allowing invalid signature in development mode');
     }
   }
 
@@ -72,6 +69,8 @@ export async function POST(request: NextRequest) {
             from: comment.from,
             media: comment.media,
           });
+        } else {
+          console.log(`[webhook] Unhandled field: ${change.field}`);
         }
       }
     }

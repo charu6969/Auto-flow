@@ -9,7 +9,7 @@ import {
 } from '@/services/instagram';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-const GRAPH_API_BASE = 'https://graph.facebook.com/v19.0';
+import { GRAPH_API_BASE } from '@/lib/constants';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -35,7 +35,32 @@ export async function GET(request: NextRequest) {
     const expiresInSeconds = longTokenRes.expires_in || 60 * 24 * 60 * 60;
     const tokenExpiresAt = new Date(Date.now() + expiresInSeconds * 1000);
 
-    // 3. Try standard /me/accounts first
+    // 3. Validate required permissions
+    const permRes = await fetch(
+      `${GRAPH_API_BASE}/me/permissions?access_token=${longTokenRes.access_token}`
+    );
+    const permData = await permRes.json();
+    const grantedPerms = (permData.data || [])
+      .filter((p: any) => p.status === 'granted')
+      .map((p: any) => p.permission);
+
+    const requiredPerms = [
+      'instagram_basic',
+      'instagram_manage_messages',
+      'instagram_manage_comments',
+      'pages_show_list',
+      'pages_messaging',
+    ];
+    const missingPerms = requiredPerms.filter(p => !grantedPerms.includes(p));
+    if (missingPerms.length > 0) {
+      console.error('[auth/callback] Missing permissions:', missingPerms);
+      return NextResponse.redirect(
+        `${APP_URL}/login?error=missing_permissions&perms=${missingPerms.join(',')}`
+      );
+    }
+    console.log('[auth/callback] All required permissions granted');
+
+    // 4. Try standard /me/accounts first
     let pages = await getUserPages(longTokenRes.access_token);
     console.log('[auth/callback] Pages from /me/accounts:', JSON.stringify(pages, null, 2));
     let pageWithIG = pages.find((p) => p.instagram_business_account);
@@ -86,16 +111,15 @@ export async function GET(request: NextRequest) {
           console.log('[auth/callback] Direct IG fetch:', JSON.stringify(igData, null, 2));
 
           if (igData.id && igData.username) {
-            // IMPORTANT: Meta requires a Page Access Token to send DMs via /{PAGE_ID}/messages.
-            // If pageData.access_token is missing, we fall back to the long-lived user token,
-            // but log a warning because DM sending may fail without a proper Page token.
+            // Instagram DMs REQUIRE a Page Access Token. A user token will be rejected.
             if (!pageData.access_token) {
-              console.warn('[auth/callback] ⚠️ No Page Access Token found — falling back to user token. DM sending may fail.');
+              console.error('[auth/callback] No Page Access Token available. Instagram DMs require a Page token.');
+              return NextResponse.redirect(`${APP_URL}/login?error=no_page_token`);
             }
             pageWithIG = {
               id: pageId,
               name: pageData.name || 'Page',
-              access_token: pageData.access_token || longTokenRes.access_token,
+              access_token: pageData.access_token,
               instagram_business_account: {
                 id: igData.id,
                 username: igData.username,

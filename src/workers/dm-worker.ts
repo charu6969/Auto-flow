@@ -1,7 +1,12 @@
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { PrismaClient } from '@prisma/client';
-import { sendInstagramDM } from '../services/instagram';
+import {
+  sendInstagramDM,
+  parseGraphApiError,
+  isPermissionError,
+  isRateLimitError,
+} from '../services/instagram';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const RATE_LIMIT_MAX = 180;
@@ -86,18 +91,36 @@ const worker = new Worker<DMJobData>(
       console.log(`[dm-worker] ✅ DM sent for log ${dmLogId}`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
+      const graphError = parseGraphApiError(error);
 
-      // Update retry count
+      let finalStatus: string;
+      if (graphError && isPermissionError(graphError)) {
+        // Permission/token errors will never succeed on retry
+        finalStatus = 'FAILED';
+        console.error(`[dm-worker] ❌ Permission error for log ${dmLogId} (code ${graphError.code}) — not retrying`);
+      } else if (graphError && isRateLimitError(graphError)) {
+        finalStatus = 'RATE_LIMITED';
+      } else {
+        finalStatus = job.attemptsMade >= 2 ? 'FAILED' : 'QUEUED';
+      }
+
       await prisma.dmLog.update({
         where: { id: dmLogId },
         data: {
-          status: job.attemptsMade >= 2 ? 'FAILED' : 'QUEUED',
-          errorMessage: errorMsg,
+          status: finalStatus,
+          errorMessage: graphError
+            ? `Graph API Error ${graphError.code}: ${graphError.message}`
+            : errorMsg,
           retryCount: job.attemptsMade,
         },
       });
 
       console.error(`[dm-worker] ❌ Failed to send DM for log ${dmLogId}:`, errorMsg);
+
+      // Don't retry permission errors — they'll never succeed
+      if (graphError && isPermissionError(graphError)) {
+        return;
+      }
       throw error; // Re-throw to trigger BullMQ retry
     }
   },
