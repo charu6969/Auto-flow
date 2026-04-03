@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
-import { PrismaClient, DmStatus } from '../../node_modules/.prisma/client';
+import { PrismaClient, DmStatus } from '@prisma/client';
 import {
   sendInstagramDM,
   parseGraphApiError,
